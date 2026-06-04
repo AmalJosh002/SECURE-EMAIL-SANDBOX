@@ -1,0 +1,10 @@
+{
+  "name": "isolated-email-sanitizer",
+  "version": "1.0.0",
+  "description": "Script running inside an air-gapped Docker container to clean HTML",
+  "main": "sanitize.js",
+  "dependencies": {
+    "dompurify": "^3.1.0",
+    "jsdom": "^24.0.0"
+  }
+}
