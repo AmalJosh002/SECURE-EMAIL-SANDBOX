@@ -1,53 +1,68 @@
 const { JSDOM } = require('jsdom');
 const createDOMPurify = require('dompurify');
 
-// 1. Initialize a virtual browser window using JSDOM
 const window = new JSDOM('').window;
 const DOMPurify = createDOMPurify(window);
 
-// 2. Configure DOMPurify settings to be highly restrictive
 const PURIFY_CONFIG = {
   ALLOWED_TAGS: ['p', 'b', 'i', 'em', 'strong', 'a', 'br', 'div', 'span', 'h1', 'h2', 'h3', 'img', 'table', 'tr', 'td', 'th', 'tbody'],
   ALLOWED_ATTR: ['href', 'src', 'target', 'style', 'alt'],
-  FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'form'], // Block executable elements completely
-  FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover'] // Prevent sneaky inline JS attacks
+  FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'form'],
+  FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover']
 };
 
-// 3. Read raw email data from standard input (passed from our main API)
-let inputBuffer = '';
-
-process.stdin.on('data', (chunk) => {
-  inputBuffer += chunk;
-});
-
-process.stdin.on('end', () => {
-  try {
-    // Parse the input data (Expecting JSON from our main app)
-    const emailData = JSON.parse(inputBuffer);
-    const rawHtml = emailData.htmlBody || `<p>${emailData.snippet}</p>`;
-
-    // Execute the sanitization process inside the sandbox
-    const cleanHtml = DOMPurify.sanitize(rawHtml, PURIFY_CONFIG);
-
-    // Wrap it in a clean layout and output it via stdout
-    const finalizedOutput = `
-      <div class="secure-email-container" style="font-family: sans-serif; color: #333; line-height: 1.5;">
-        <div class="email-metadata" style="background: #f1f3f4; padding: 10px; border-radius: 4px; margin-bottom: 15px;">
-          <strong>From:</strong> ${emailData.from || 'Unknown'}<br/>
-          <strong>Subject:</strong> ${emailData.subject || '(No Subject)'}
-        </div>
-        <div class="email-body">
-          ${cleanHtml}
-        </div>
-      </div>
-    `;
-
-    // Output the safe content back to our main server
-    process.stdout.write(finalizedOutput);
-    process.exit(0); // Exit successfully
-
-  } catch (error) {
-    process.stderr.write(`Sanitizer Error: ${error.message}`);
-    process.exit(1); // Exit with error code
+try {
+  const base64Data = process.argv[2];
+  if (!base64Data) {
+    throw new Error("No data arguments passed to execution vector.");
   }
-});
+
+  const decodedJson = Buffer.from(base64Data, 'base64').toString('utf8');
+  const emailData = JSON.parse(decodedJson);
+  
+  let rawHtml = emailData.htmlBody;
+  if (!rawHtml || rawHtml.trim() === '') {
+    const bodyContent = emailData.snippet || '(No text content available in this message)';
+    rawHtml = `<p style="white-space: pre-wrap;">${bodyContent}</p>`;
+  }
+
+  // 1. Sanitize the HTML payload using DOMPurify
+  let cleanHtml = DOMPurify.sanitize(rawHtml, PURIFY_CONFIG);
+
+  // 2. NEW: Intercept and rewrite hyperlinks to point to our secure URL sandbox
+  const dom = new JSDOM(cleanHtml);
+  const document = dom.window.document;
+  const links = document.querySelectorAll('a');
+
+  links.forEach(link => {
+    const originalUrl = link.getAttribute('href');
+    // Ensure it's a valid web link
+    if (originalUrl && (originalUrl.startsWith('http://') || originalUrl.startsWith('https://'))) {
+      // Route through our host interceptor endpoint
+      link.setAttribute('href', `/sandbox-link?url=${encodeURIComponent(originalUrl)}`);
+      link.setAttribute('target', '_blank'); // Force open in a secure new tab
+      link.setAttribute('style', 'color: #1a73e8; text-decoration: underline;');
+    }
+  });
+
+  cleanHtml = document.body.innerHTML;
+
+  const finalizedOutput = `
+    <div class="secure-email-container" style="font-family: sans-serif; color: #333; line-height: 1.5;">
+      <div class="email-metadata" style="background: #f1f3f4; padding: 10px; border-radius: 4px; margin-bottom: 15px;">
+        <strong>From:</strong> ${emailData.from || 'Unknown'}<br/>
+        <strong>Subject:</strong> ${emailData.subject || '(No Subject)'}
+      </div>
+      <div class="email-body">
+        ${cleanHtml}
+      </div>
+    </div>
+  `;
+
+  process.stdout.write(finalizedOutput);
+  process.exit(0);
+
+} catch (error) {
+  process.stderr.write(`Sanitizer Internal Exception: ${error.message}\n`);
+  process.exit(1);
+}

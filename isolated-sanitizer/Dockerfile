@@ -17,5 +17,5 @@ COPY sanitize.js ./
 # to a generic, restricted 'node' user to trap any system breakouts
 USER node
 
-# Instruct the container to execute our script by default
-CMD ["node", "sanitize.js"]
+# FIXED: Keep the container alive for up to 30 seconds so server.js can inject commands
+CMD ["sleep", "30"]
